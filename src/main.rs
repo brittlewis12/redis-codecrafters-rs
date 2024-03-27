@@ -11,13 +11,13 @@ fn main() {
             Ok(mut stream) => {
                 println!("accepted new connection");
                 let mut buf = [0; 512];
-                stream.read(&mut buf).unwrap();
-                println!("received: {:?}", buf);
-                let response = match &buf[..] {
+                let len = stream.read(&mut buf).unwrap();
+                println!("received: {:?}", String::from_utf8_lossy(&buf[..len]));
+                let response = match &buf[..len] {
                     b"*1\r\n$4\r\nping\r\n" => "+PONG\r\n",
                     _ => "-ERR unknown command\r\n",
                 };
-                stream.write(response.as_bytes()).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
                 stream.flush().unwrap();
             }
             Err(e) => {
