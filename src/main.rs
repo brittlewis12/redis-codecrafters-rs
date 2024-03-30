@@ -108,6 +108,10 @@ async fn main() -> Result<()> {
                                 .unwrap_or(format!("$-1{CRLF}"))
                                 .to_string()
                         }
+                        Command::Info(_sections) => {
+                            let info = format!("# Replication\nrole:master\nconnected_slaves:0");
+                            format!("${len}{CRLF}{info}{CRLF}", len = info.len())
+                        }
                         Command::Set(key, val, expiry) => {
                             let db = db.clone();
                             let mut db_writable = db.lock().await;
@@ -180,6 +184,23 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                                 }
                             };
                             Command::Get(key)
+                        }
+                        "info" => {
+                            let mut sections = vec![];
+                            while let Some(section) = iter.next() {
+                                match section {
+                                    DataType::BulkString(section)
+                                    | DataType::SimpleString(section) => {
+                                        sections.push(section);
+                                    }
+                                    _ => {
+                                        return Err(Error::other(format!(
+                                            "invalid RESP `INFO` section {section:?}"
+                                        )))
+                                    }
+                                }
+                            }
+                            Command::Info(sections)
                         }
                         "set" => {
                             let key = iter.next().expect("missing SET key");
@@ -317,6 +338,8 @@ pub(crate) enum Command {
     Echo(String),
     /// GET key
     Get(String),
+    /// INFO
+    Info(Vec<String>),
     /// SET key value [PX milliseconds]
     Set(String, String, Option<u64>),
 }
@@ -450,6 +473,22 @@ mod tests {
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
         assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
+    }
+
+    #[test]
+    fn test_info_replication() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*2\r\n$4\r\ninfo\r\n$11\r\nreplication\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!(
+            "$44\r\n# Replication\nrole:master\nconnected_slaves:0\r\n",
+            String::from_utf8_lossy(&mut buf[..len])
+        );
     }
 
     #[test]
