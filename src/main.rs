@@ -9,7 +9,33 @@ const CRLF: &str = "\r\n";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:6379")
+    let mut args = std::env::args().into_iter();
+    let mut port = 6379;
+    while let Some(arg) = args.next() {
+        println!("arg: {arg}");
+        match arg.as_str() {
+            "--help" => {
+                println!("Usage: redis-server [options]");
+                println!("Options:");
+                println!("  --help: display this help message");
+                println!("  --port: specify the port to listen on (default: 6379)");
+                std::process::exit(0);
+            }
+            "--port" => {
+                port = args
+                    .next()
+                    .expect("missing port argument")
+                    .parse::<u16>()
+                    .expect("invalid port argument");
+                println!("port: {port}");
+            }
+            _ => {
+                eprintln!("ignoring unknown argument: {arg}");
+            }
+        }
+    }
+
+    let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
         .await
         .expect("failed to bind TCP");
     println!(
