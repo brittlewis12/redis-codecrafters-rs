@@ -1,6 +1,8 @@
+use std::{collections::HashMap, sync::Arc};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, Result},
+    io::{AsyncReadExt, AsyncWriteExt, Error, Result},
     net::TcpListener,
+    sync::Mutex,
 };
 
 const CRLF: &str = "\r\n";
@@ -15,12 +17,15 @@ async fn main() -> Result<()> {
         listener.local_addr().expect("failed to read local address")
     );
 
+    let db: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+
     loop {
         let (mut stream, _addr) = listener
             .accept()
             .await
             .expect("failed to accept incoming connection");
         println!("accepted new connection");
+        let db = db.clone();
         tokio::spawn(async move {
             loop {
                 let mut buf = vec![0; 512];
@@ -33,13 +38,21 @@ async fn main() -> Result<()> {
                 }
                 let input = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
                 println!("received: {:?}", input);
-                let commands = parse(&input).unwrap_or_else(|e| {
-                    eprintln!("error parsing input: {:?}", e);
-                    vec![]
-                });
+                let (commands, error) = match parse(&input) {
+                    Ok(commands) => (commands, None),
+                    Err(e) => {
+                        eprintln!("error parsing input: {:?}", e);
+                        (vec![], Some(e.to_string()))
+                    }
+                };
                 if commands.is_empty() {
+                    let message = if let Some(error) = error {
+                        format!("-ERR {error}{CRLF}")
+                    } else {
+                        format!("-ERR invalid request formatting{CRLF}")
+                    };
                     stream
-                        .write_all(format!("-ERR invalid request formatting{CRLF}").as_bytes())
+                        .write_all(message.as_bytes())
                         .await
                         .expect("failed to write failure response to stream");
                     stream
@@ -50,7 +63,7 @@ async fn main() -> Result<()> {
                 }
                 println!("commands: {:?}", commands);
                 let mut responses = vec![];
-                let mut commands = commands.iter();
+                let mut commands = commands.into_iter();
                 while let Some(command) = commands.next() {
                     println!("command: {:?}", command);
                     let response = match command {
@@ -58,6 +71,22 @@ async fn main() -> Result<()> {
                         Command::Echo(echo_value) => {
                             let len = echo_value.len();
                             format!("${len}{CRLF}{echo_value}{CRLF}")
+                        }
+                        Command::Get(key) => {
+                            let db = db.clone();
+                            let db = db.lock().await;
+                            db.get(&key)
+                                .map(|val: &String| {
+                                    format!("${len}{CRLF}{val}{CRLF}", len = val.len())
+                                })
+                                .unwrap_or(format!("$-1{CRLF}"))
+                                .to_string()
+                        }
+                        Command::Set(key, val) => {
+                            let db = db.clone();
+                            let mut db = db.lock().await;
+                            db.insert(key, val);
+                            format!("+OK{CRLF}")
                         }
                     };
                     responses.push(response);
@@ -89,36 +118,66 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                     let command = match s.to_lowercase().as_str() {
                         "ping" => Command::Ping,
                         "echo" => {
-                            let echo_value = iter.next().expect("missing echo value");
+                            let echo_value = iter.next().expect("missing ECHO value");
                             match echo_value {
                                 DataType::BulkString(echo_value)
                                 | DataType::SimpleString(echo_value) => Command::Echo(echo_value),
                                 _ => {
-                                    return Err(std::io::Error::other(format!(
-                                        "invalid RESP echo value {echo_value:?}"
+                                    return Err(Error::other(format!(
+                                        "invalid RESP `ECHO` value {echo_value:?}"
                                     )))
                                 }
                             }
                         }
-                        _ => {
-                            return Err(std::io::Error::other(format!(
-                                "unknown command {command:?}"
+                        "get" => {
+                            let key = iter.next().expect("missing GET key");
+                            let key = match key {
+                                DataType::BulkString(key) | DataType::SimpleString(key) => key,
+                                _ => {
+                                    return Err(Error::other(format!(
+                                        "invalid RESP `GET` key {key:?}"
+                                    )))
+                                }
+                            };
+                            Command::Get(key)
+                        }
+                        "set" => {
+                            let key = iter.next().expect("missing SET key");
+                            let key = match key {
+                                DataType::BulkString(key) | DataType::SimpleString(key) => key,
+                                _ => {
+                                    return Err(Error::other(format!(
+                                        "invalid RESP `GET` key {key:?}"
+                                    )))
+                                }
+                            };
+                            let val = iter.next().expect("missing SET value");
+                            let val = match val {
+                                DataType::BulkString(val) | DataType::SimpleString(val) => val,
+                                _ => {
+                                    return Err(Error::other(format!(
+                                        "invalid RESP `SET` val {val:?}"
+                                    )))
+                                }
+                            };
+                            Command::Set(key, val)
+                        }
+                        unknown => {
+                            return Err(Error::other(format!(
+                                "unknown command `{}`",
+                                unknown.to_uppercase()
                             )))
                         }
                     };
                     commands.push(command);
                 }
-                _ => {
-                    return Err(std::io::Error::other(format!(
-                        "invalid RESP command {command:?}"
-                    )))
-                }
+                _ => return Err(Error::other(format!("invalid RESP command {command:?}"))),
             };
         }
         Ok(commands)
     } else {
         eprintln!("invalid commands, expected RESP array, got {commands:?}");
-        Err(std::io::Error::other("invalid RESP commands"))
+        Err(Error::other(format!("invalid RESP commands: {commands:?}")))
     }
 }
 
@@ -180,6 +239,8 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
 pub(crate) enum Command {
     Ping,
     Echo(String),
+    Get(String),
+    Set(String, String),
 }
 
 /// RESP (Redis serialization protocol) types - only supporting RESP2 for now.
@@ -221,6 +282,7 @@ mod tests {
         stream.write_all(b"*1\r\n$4\r\nping\r\n").unwrap();
         stream.flush().unwrap();
         let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
         assert_eq!(len, 7);
         assert_eq!(String::from_utf8_lossy(&buf[..len]), "+PONG\r\n");
     }
@@ -234,7 +296,46 @@ mod tests {
         stream.flush().unwrap();
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
         assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+    }
+
+    #[test]
+    fn test_set_and_get() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*3\r\n$3\r\nset\r\n$3\r\nmsg\r\n$3\r\nhey\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+
+        stream
+            .write_all(b"*2\r\n$3\r\nget\r\n$3\r\nmsg\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+    }
+
+    #[test]
+    fn test_get_nonexistent_key_returns_resp_null() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*2\r\n$3\r\nget\r\n$11\r\ndoesntexist\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
     }
 
     #[test]
