@@ -351,6 +351,7 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
 }
 
 /// Server replication modes
+#[derive(Copy, Clone)]
 enum Mode {
     Master,
     Replica(IpAddr, u16),
