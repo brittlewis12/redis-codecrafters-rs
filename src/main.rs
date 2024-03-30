@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Error, Result},
     net::TcpListener,
@@ -82,10 +82,24 @@ async fn main() -> Result<()> {
                                 .unwrap_or(format!("$-1{CRLF}"))
                                 .to_string()
                         }
-                        Command::Set(key, val) => {
+                        Command::Set(key, val, expiry) => {
                             let db = db.clone();
-                            let mut db = db.lock().await;
-                            db.insert(key, val);
+                            let mut db_writable = db.lock().await;
+                            // ACTIVE EXPIRY: queue a task to proactively delete the key after expiry ms.
+                            //   * TODO: how to cancel task if key is updated before expiry?
+                            // alt., PASSIVE EXPIRY: write expiry time along with key to db, and delete on GET once expiry elapsed.
+                            db_writable.insert(key.clone(), val);
+                            drop(db_writable);
+                            if let Some(expiry) = expiry {
+                                let db = db.clone();
+                                tokio::task::spawn(async move {
+                                    println!("queuing expiry for key: {key:?} in {expiry}ms");
+                                    tokio::time::sleep(Duration::from_millis(expiry)).await;
+                                    let mut db_writable = db.lock().await;
+                                    db_writable.remove(&key);
+                                    println!("expired key: {key:?}");
+                                });
+                            }
                             format!("+OK{CRLF}")
                         }
                     };
@@ -109,7 +123,7 @@ async fn main() -> Result<()> {
 pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
     let (commands, _rest) = decode_resp(input)?;
     if let DataType::Array(commands) = commands {
-        let mut iter = commands.into_iter();
+        let mut iter = commands.into_iter().peekable();
         let mut commands = vec![];
         while let Some(command) = iter.next() {
             match command {
@@ -160,7 +174,41 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                                     )))
                                 }
                             };
-                            Command::Set(key, val)
+                            if let Some(data) = iter.peek() {
+                                match data {
+                                    DataType::BulkString(ref s) | DataType::SimpleString(ref s) => {
+                                        if s.to_lowercase().as_str() == "px" {
+                                            iter.next();
+                                            let millis = iter.next().expect("missing PX value");
+                                            match millis {
+                                                DataType::BulkString(millis)
+                                                | DataType::SimpleString(millis) => {
+                                                    let millis = millis
+                                                        .parse::<u64>()
+                                                        .expect("invalid PX value");
+                                                    Command::Set(key, val, Some(millis))
+                                                }
+                                                _ => {
+                                                    return Err(Error::other(format!(
+                                                        "invalid RESP `SET` PX value {millis:?}"
+                                                    )))
+                                                }
+                                            }
+                                        } else {
+                                            return Err(Error::other(format!(
+                                                "invalid RESP `SET` option {s:?}"
+                                            )));
+                                        }
+                                    }
+                                    unknown => {
+                                        return Err(Error::other(format!(
+                                            "invalid RESP `SET` option {unknown:?}"
+                                        )))
+                                    }
+                                }
+                            } else {
+                                Command::Set(key, val, None)
+                            }
                         }
                         unknown => {
                             return Err(Error::other(format!(
@@ -237,10 +285,14 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
 /// Redis commands
 #[derive(Debug)]
 pub(crate) enum Command {
+    /// PING
     Ping,
+    /// ECHO message
     Echo(String),
+    /// GET key
     Get(String),
-    Set(String, String),
+    /// SET key value [PX milliseconds]
+    Set(String, String, Option<u64>),
 }
 
 /// RESP (Redis serialization protocol) types - only supporting RESP2 for now.
@@ -322,6 +374,42 @@ mod tests {
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
         assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+    }
+
+    #[test]
+    fn test_set_with_px() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*5\r\n$3\r\nset\r\n$3\r\ntmp\r\n$3\r\nhey\r\n$2\r\npx\r\n$2\r\n50\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+
+        stream
+            .write_all(b"*2\r\n$3\r\nget\r\n$3\r\ntmp\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        stream
+            .write_all(b"*2\r\n$3\r\nget\r\n$3\r\ntmp\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
     }
 
     #[test]
