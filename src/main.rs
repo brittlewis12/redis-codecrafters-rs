@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::Read,
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::Duration,
@@ -14,9 +15,13 @@ const CRLF: &str = "\r\n";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = std::env::args().into_iter();
+    let mut args = std::env::args();
     let mut port = 6379;
     let mut mode = Mode::Master;
+    let mut urandom = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
+    let mut buffer = [0u8; 40];
+    urandom.read_exact(&mut buffer)?;
+    let replid = String::from_utf8_lossy(buffer[..].as_ref()).to_string();
     while let Some(arg) = args.next() {
         println!("arg: {arg}");
         match arg.as_str() {
@@ -75,11 +80,14 @@ async fn main() -> Result<()> {
     if let Mode::Replica(ip, port) = mode {
         // TODO: implement replication connection
         println!("replicating from {ip}:{port}");
+    } else {
+        println!("master_replid: {replid}");
     }
 
     let db: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
+        let replid = replid.clone();
         let (mut stream, _addr) = listener
             .accept()
             .await
@@ -98,7 +106,7 @@ async fn main() -> Result<()> {
                 }
                 let input = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
                 println!("received: {:?}", input);
-                let (commands, error) = match parse(&input) {
+                let (commands, error) = match parse(input) {
                     Ok(commands) => (commands, None),
                     Err(e) => {
                         eprintln!("error parsing input: {:?}", e);
@@ -123,8 +131,8 @@ async fn main() -> Result<()> {
                 }
                 println!("commands: {:?}", commands);
                 let mut responses = vec![];
-                let mut commands = commands.into_iter();
-                while let Some(command) = commands.next() {
+                let commands = commands.into_iter();
+                for command in commands {
                     println!("command: {:?}", command);
                     let response = match command {
                         Command::Ping => format!("+PONG{CRLF}"), // TODO: leverage serde, a la serde_bencode -- serde_resp?
@@ -143,7 +151,7 @@ async fn main() -> Result<()> {
                                 .to_string()
                         }
                         Command::Info(_sections) => {
-                            let info = format!("# Replication\nrole:{mode}\nconnected_slaves:1");
+                            let info = format!("# Replication\nrole:{mode}\nconnected_slaves:1\nmaster_replid:{replid}\nmaster_repl_offset:0");
                             format!("${len}{CRLF}{info}{CRLF}", len = info.len())
                         }
                         Command::Set(key, val, expiry) => {
@@ -221,7 +229,7 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                         }
                         "info" => {
                             let mut sections = vec![];
-                            while let Some(section) = iter.next() {
+                            for section in &mut iter {
                                 match section {
                                     DataType::BulkString(section)
                                     | DataType::SimpleString(section) => {
@@ -345,7 +353,7 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
             // recursively parse array elements by \r\n
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
-                let (element, new_rest) = decode_resp(&rest)?;
+                let (element, new_rest) = decode_resp(rest)?;
                 println!("element: {element:?}     rest: {new_rest}");
                 rest = new_rest;
                 arr.push(element);
