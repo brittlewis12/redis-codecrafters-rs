@@ -7,16 +7,27 @@ const CRLF: &str = "\r\n";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
-    println!("listening on {}", listener.local_addr().unwrap());
+    let listener = TcpListener::bind("127.0.0.1:6379")
+        .await
+        .expect("failed to bind TCP");
+    println!(
+        "listening on {}",
+        listener.local_addr().expect("failed to read local address")
+    );
 
     loop {
-        let (mut stream, _addr) = listener.accept().await.unwrap();
+        let (mut stream, _addr) = listener
+            .accept()
+            .await
+            .expect("failed to accept incoming connection");
         println!("accepted new connection");
         tokio::spawn(async move {
             loop {
                 let mut buf = vec![0; 512];
-                let len = stream.read(&mut buf).await.unwrap();
+                let len = stream
+                    .read(&mut buf)
+                    .await
+                    .expect("failed to read incoming stream");
                 if len == 0 {
                     break;
                 }
@@ -30,8 +41,11 @@ async fn main() -> Result<()> {
                     stream
                         .write_all(format!("-ERR invalid request formatting{CRLF}").as_bytes())
                         .await
-                        .unwrap();
-                    stream.flush().await.unwrap();
+                        .expect("failed to write failure response to stream");
+                    stream
+                        .flush()
+                        .await
+                        .expect("failed to flush stream after failure response");
                     break;
                 }
                 println!("commands: {:?}", commands);
@@ -49,8 +63,14 @@ async fn main() -> Result<()> {
                     responses.push(response);
                 }
                 for response in responses {
-                    stream.write_all(response.as_bytes()).await.unwrap();
-                    stream.flush().await.unwrap();
+                    stream
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("failed to write success response to stream");
+                    stream
+                        .flush()
+                        .await
+                        .expect("failed to flush stream after success response");
                 }
             }
         });
