@@ -22,46 +22,34 @@ async fn main() -> Result<()> {
                 }
                 let input = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
                 println!("received: {:?}", input);
-                let (commands, _rest) = parse(&input).unwrap();
-                println!("commands: {:?}", commands);
-                let mut responses = vec![];
-                if let DataType::Array(commands) = commands {
-                    let mut iter = commands.into_iter();
-                    while let Some(command) = iter.next() {
-                        println!("command: {:?}", command);
-                        let response = match command {
-                            DataType::BulkString(s) | DataType::SimpleString(s) => {
-                                // TODO: test this case insensitivity!
-                                match s.to_lowercase().as_str() {
-                                    "ping" => format!("+PONG{CRLF}"), // TODO: leverage serde, a la serde_bencode -- serde_resp?
-                                    "echo" => {
-                                        if let DataType::BulkString(echo_value) =
-                                            iter.next().expect("missing echo value")
-                                        {
-                                            let len = echo_value.len();
-                                            format!("${len}{CRLF}{echo_value}{CRLF}")
-                                        } else {
-                                            // FIXME: better simple error
-                                            format!("-ERR missing echo value{CRLF}")
-                                        }
-                                    }
-                                    _ => format!("-ERR unknown command{CRLF}"),
-                                }
-                            }
-                            _ => format!("-ERR unknown command{CRLF}"),
-                        };
-                        responses.push(response);
-                    }
-                    for response in responses {
-                        stream.write_all(response.as_bytes()).await.unwrap();
-                        stream.flush().await.unwrap();
-                    }
-                } else {
-                    eprintln!("invalid command {commands:?}");
+                let commands = parse(&input).unwrap_or_else(|e| {
+                    eprintln!("error parsing input: {:?}", e);
+                    vec![]
+                });
+                if commands.is_empty() {
                     stream
                         .write_all(format!("-ERR invalid request formatting{CRLF}").as_bytes())
                         .await
                         .unwrap();
+                    stream.flush().await.unwrap();
+                    break;
+                }
+                println!("commands: {:?}", commands);
+                let mut responses = vec![];
+                let mut commands = commands.iter();
+                while let Some(command) = commands.next() {
+                    println!("command: {:?}", command);
+                    let response = match command {
+                        Command::Ping => format!("+PONG{CRLF}"), // TODO: leverage serde, a la serde_bencode -- serde_resp?
+                        Command::Echo(echo_value) => {
+                            let len = echo_value.len();
+                            format!("${len}{CRLF}{echo_value}{CRLF}")
+                        }
+                    };
+                    responses.push(response);
+                }
+                for response in responses {
+                    stream.write_all(response.as_bytes()).await.unwrap();
                     stream.flush().await.unwrap();
                 }
             }
@@ -69,7 +57,52 @@ async fn main() -> Result<()> {
     }
 }
 
-pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
+pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
+    let (commands, _rest) = decode_resp(input)?;
+    if let DataType::Array(commands) = commands {
+        let mut iter = commands.into_iter();
+        let mut commands = vec![];
+        while let Some(command) = iter.next() {
+            match command {
+                DataType::BulkString(ref s) | DataType::SimpleString(ref s) => {
+                    // TODO: test this case insensitivity!
+                    let command = match s.to_lowercase().as_str() {
+                        "ping" => Command::Ping,
+                        "echo" => {
+                            let echo_value = iter.next().expect("missing echo value");
+                            match echo_value {
+                                DataType::BulkString(echo_value)
+                                | DataType::SimpleString(echo_value) => Command::Echo(echo_value),
+                                _ => {
+                                    return Err(std::io::Error::other(format!(
+                                        "invalid RESP echo value {echo_value:?}"
+                                    )))
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(std::io::Error::other(format!(
+                                "unknown command {command:?}"
+                            )))
+                        }
+                    };
+                    commands.push(command);
+                }
+                _ => {
+                    return Err(std::io::Error::other(format!(
+                        "invalid RESP command {command:?}"
+                    )))
+                }
+            };
+        }
+        Ok(commands)
+    } else {
+        eprintln!("invalid commands, expected RESP array, got {commands:?}");
+        Err(std::io::Error::other("invalid RESP commands"))
+    }
+}
+
+pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
     // check first byte. we'll handle +, $, * for now.
     let (first_byte, rest) = input.split_at(1);
     let first_char = first_byte.chars().next().expect("unexpected empty string");
@@ -104,8 +137,8 @@ pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
             // recursively parse array elements by \r\n
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
-                let (element, new_rest) = parse(&rest)?;
-                println!("element: {element:?}     rest: {rest}");
+                let (element, new_rest) = decode_resp(&rest)?;
+                println!("element: {element:?}     rest: {new_rest}");
                 rest = new_rest;
                 arr.push(element);
             }
@@ -122,6 +155,12 @@ pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
     Ok(data)
 }
 
+/// Redis commands
+#[derive(Debug)]
+pub(crate) enum Command {
+    Ping,
+    Echo(String),
+}
 
 /// RESP (Redis serialization protocol) types - only supporting RESP2 for now.
 #[derive(Debug, PartialEq)]
@@ -179,23 +218,23 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_simple_string() {
+    fn test_decode_resp_simple_string() {
         let data = "+OK\r\n";
-        let (parsed, _rest) = parse(data).unwrap();
+        let (parsed, _rest) = decode_resp(data).unwrap();
         assert_eq!(parsed, DataType::SimpleString("OK".to_string()));
     }
 
     #[test]
-    fn test_parse_bulk_string() {
+    fn test_decode_resp_bulk_string() {
         let data = "$5\r\nhello\r\n";
-        let (parsed, _rest) = parse(data).unwrap();
+        let (parsed, _rest) = decode_resp(data).unwrap();
         assert_eq!(parsed, DataType::BulkString("hello".to_string()));
     }
 
     #[test]
-    fn test_parse_array() {
+    fn test_decode_resp_array() {
         let data = "*2\r\n$3\r\nfoo\r\n$3\r\nbar\r\n";
-        let (parsed, _rest) = parse(data).unwrap();
+        let (parsed, _rest) = decode_resp(data).unwrap();
         assert_eq!(
             parsed,
             DataType::Array(vec![
