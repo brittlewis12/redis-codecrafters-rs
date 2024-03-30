@@ -20,20 +20,51 @@ async fn main() -> Result<()> {
                 }
                 let input = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
                 println!("received: {:?}", input);
-                let command = parse(&input).unwrap();
-                let response = match &buf[..len] {
-                    b"*1\r\n$4\r\nping\r\n" => "+PONG\r\n",
-                    _ => "-ERR unknown command\r\n",
-                };
-                stream.write_all(response.as_bytes()).await.unwrap();
-                stream.flush().await.unwrap();
+                let (commands, _rest) = parse(&input).unwrap();
+                println!("commands: {:?}", commands);
+                let mut responses = vec![];
+                if let DataType::Array(commands) = commands {
+                    let mut iter = commands.into_iter();
+                    while let Some(command) = iter.next() {
+                        println!("command: {:?}", command);
+                        let response = match command {
+                            DataType::BulkString(s) | DataType::SimpleString(s) => {
+                                // TODO: test this case insensitivity!
+                                match s.to_lowercase().as_str() {
+                                    "ping" => "+PONG\r\n".into(), // TODO: leverage serde, a la serde_bencode -- serde_resp?
+                                    "echo" => {
+                                        if let DataType::BulkString(echo_value) =
+                                            iter.next().expect("missing echo value")
+                                        {
+                                            echo_value
+                                        } else {
+                                            // FIXME: better simple error
+                                            "-ERR missing echo value\r\n".into()
+                                        }
+                                    }
+                                    _ => "-ERR unknown command\r\n".into(),
+                                }
+                            }
+                            _ => "-ERR unknown command\r\n".into(),
+                        };
+                        responses.push(response);
+                    }
+                    for response in responses {
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                        stream.flush().await.unwrap();
+                    }
+                } else {
+                    eprintln!("invalid command {commands:?}");
+                    stream
+                        .write_all("-ERR invalid request formatting\r\n".as_bytes())
+                        .await
+                        .unwrap();
+                    stream.flush().await.unwrap();
+                }
             }
         });
     }
 }
-
-
-// fn parse_line(line: String) -> Result<DataType> { }
 
 pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
     // check first byte. we'll handle +, $, * for now.
@@ -43,11 +74,15 @@ pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
     let data = match first_char {
         '+' => {
             // parse simple string
-            let (simple_string, rest) = rest.split_once("\r\n").expect("missing \\r\\n terminator for simple string");
+            let (simple_string, rest) = rest
+                .split_once("\r\n")
+                .expect("missing \\r\\n terminator for simple string");
             (DataType::SimpleString(simple_string.to_string()), rest)
         }
         '$' => {
-            let (str_len, rest) = rest.split_once("\r\n").expect("missing \\r\\n terminator for bulk string");
+            let (str_len, rest) = rest
+                .split_once("\r\n")
+                .expect("missing \\r\\n terminator for bulk string");
             let len: usize = str_len.parse().expect("invalid bulk string length");
             println!("bulk string detected. len: {len}");
             let bulk_string = &rest[..len];
@@ -58,15 +93,17 @@ pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
             (DataType::BulkString(bulk_string.to_string()), rest)
         }
         '*' => {
-            let (str_len, mut rest) = rest.split_once("\r\n").expect("missing \\r\\n terminator for array");
+            let (str_len, mut rest) = rest
+                .split_once("\r\n")
+                .expect("missing \\r\\n terminator for array");
             let len: usize = str_len.parse().expect("invalid array length");
             println!("array detected. len: {len}");
             // recursively parse array elements by \r\n
             let mut arr = Vec::with_capacity(len);
             for _ in 0..len {
-                let (element, newRest) = parse(&rest)?;
+                let (element, new_rest) = parse(&rest)?;
                 println!("element: {element:?}     rest: {rest}");
-                rest = newRest;
+                rest = new_rest;
                 arr.push(element);
             }
             println!("array: {arr:?}   rest: {rest}");
@@ -82,13 +119,8 @@ pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
     Ok(data)
 }
 
-/// Redis commands
-pub(crate) enum Command {
-    Ping,
-    Echo,
-}
 
-/// RESP (Redis serialization protocol) types
+/// RESP (Redis serialization protocol) types - only supporting RESP2 for now.
 #[derive(Debug, PartialEq)]
 pub(crate) enum DataType {
     SimpleString(String),
@@ -134,12 +166,13 @@ mod tests {
     #[test]
     fn test_echo() {
         let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
-        stream.write_all(b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n").unwrap();
+        stream
+            .write_all(b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n")
+            .unwrap();
         stream.flush().unwrap();
         let mut buf = vec![0; 512];
-        let len = stream.read_to_end(&mut buf).unwrap();
+        let len = stream.read(&mut buf).unwrap();
         assert_eq!("hey", String::from_utf8_lossy(&mut buf[..len]));
-
     }
 
     #[test]
