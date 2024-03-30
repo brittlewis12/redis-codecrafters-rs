@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
                                         if let DataType::BulkString(echo_value) =
                                             iter.next().expect("missing echo value")
                                         {
-                                            echo_value
+                                            format!("+{echo_value}\r\n")
                                         } else {
                                             // FIXME: better simple error
                                             "-ERR missing echo value\r\n".into()
@@ -172,7 +172,7 @@ mod tests {
         stream.flush().unwrap();
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
-        assert_eq!("hey", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("+hey\r\n", String::from_utf8_lossy(&mut buf[..len]));
     }
 
     #[test]
