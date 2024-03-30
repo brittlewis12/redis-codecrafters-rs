@@ -1,4 +1,9 @@
-use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Error, Result},
     net::TcpListener,
@@ -32,11 +37,19 @@ async fn main() -> Result<()> {
                 println!("port: {port}");
             }
             "--replicaof" => {
-                let master_host = args
-                    .next()
-                    .expect("missing master host argument")
-                    .parse::<IpAddr>()
-                    .expect("invalid master host argument");
+                // TODO: maybe ToSocketAddrs is a nicer API for this?
+                let master_host = args.next().expect("missing master host argument");
+                let master_host = master_host.parse::<IpAddr>().unwrap_or_else(|_| {
+                    // eprintln!("invalid master host argument: {master_host}");
+                    // std::process::exit(1);
+                    match master_host.as_str() {
+                        "localhost" => IpAddr::V4(Ipv4Addr::LOCALHOST),
+                        _ => {
+                            eprintln!("invalid master host argument: {master_host}");
+                            std::process::exit(1);
+                        }
+                    }
+                });
                 let master_port = args
                     .next()
                     .expect("missing master port argument")
