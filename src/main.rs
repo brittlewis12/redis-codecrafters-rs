@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::IpAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Error, Result},
     net::TcpListener,
@@ -11,6 +11,7 @@ const CRLF: &str = "\r\n";
 async fn main() -> Result<()> {
     let mut args = std::env::args().into_iter();
     let mut port = 6379;
+    let mut mode = Mode::Master;
     while let Some(arg) = args.next() {
         println!("arg: {arg}");
         match arg.as_str() {
@@ -18,7 +19,8 @@ async fn main() -> Result<()> {
                 println!("Usage: redis-server [options]");
                 println!("Options:");
                 println!("  --help: display this help message");
-                println!("  --port: specify the port to listen on (default: 6379)");
+                println!("  --port <PORT>: specify the port to listen on (default: 6379)");
+                println!("  --replicaof <MASTER_HOST> <MASTER_PORT>: start in replica mode, connecting to the specified master");
                 std::process::exit(0);
             }
             "--port" => {
@@ -28,6 +30,20 @@ async fn main() -> Result<()> {
                     .parse::<u16>()
                     .expect("invalid port argument");
                 println!("port: {port}");
+            }
+            "--replicaof" => {
+                let master_host = args
+                    .next()
+                    .expect("missing master host argument")
+                    .parse::<IpAddr>()
+                    .expect("invalid master host argument");
+                let master_port = args
+                    .next()
+                    .expect("missing master port argument")
+                    .parse::<u16>()
+                    .expect("invalid master port argument");
+                println!("replicaof: {master_host}:{master_port}");
+                mode = Mode::Replica(master_host, master_port);
             }
             _ => {
                 eprintln!("ignoring unknown argument: {arg}");
@@ -42,6 +58,11 @@ async fn main() -> Result<()> {
         "listening on {}",
         listener.local_addr().expect("failed to read local address")
     );
+
+    if let Mode::Replica(ip, port) = mode {
+        // TODO: implement replication connection
+        println!("replicating from {ip}:{port}");
+    }
 
     let db: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
 
@@ -109,7 +130,7 @@ async fn main() -> Result<()> {
                                 .to_string()
                         }
                         Command::Info(_sections) => {
-                            let info = format!("# Replication\nrole:master\nconnected_slaves:0");
+                            let info = format!("# Replication\nrole:{mode}\nconnected_slaves:1");
                             format!("${len}{CRLF}{info}{CRLF}", len = info.len())
                         }
                         Command::Set(key, val, expiry) => {
@@ -327,6 +348,21 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
     };
 
     Ok(data)
+}
+
+/// Server replication modes
+enum Mode {
+    Master,
+    Replica(IpAddr, u16),
+}
+
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Mode::Master => write!(f, "master"),
+            Mode::Replica(_ip, _port) => write!(f, "slave"),
+        }
+    }
 }
 
 /// Redis commands
