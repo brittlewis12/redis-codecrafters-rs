@@ -3,6 +3,8 @@ use tokio::{
     net::TcpListener,
 };
 
+const CRLF: &str = "\r\n";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
@@ -31,21 +33,22 @@ async fn main() -> Result<()> {
                             DataType::BulkString(s) | DataType::SimpleString(s) => {
                                 // TODO: test this case insensitivity!
                                 match s.to_lowercase().as_str() {
-                                    "ping" => "+PONG\r\n".into(), // TODO: leverage serde, a la serde_bencode -- serde_resp?
+                                    "ping" => format!("+PONG{CRLF}"), // TODO: leverage serde, a la serde_bencode -- serde_resp?
                                     "echo" => {
                                         if let DataType::BulkString(echo_value) =
                                             iter.next().expect("missing echo value")
                                         {
-                                            format!("+{echo_value}\r\n")
+                                            let len = echo_value.len();
+                                            format!("${len}{CRLF}{echo_value}{CRLF}")
                                         } else {
                                             // FIXME: better simple error
-                                            "-ERR missing echo value\r\n".into()
+                                            format!("-ERR missing echo value{CRLF}")
                                         }
                                     }
-                                    _ => "-ERR unknown command\r\n".into(),
+                                    _ => format!("-ERR unknown command{CRLF}"),
                                 }
                             }
-                            _ => "-ERR unknown command\r\n".into(),
+                            _ => format!("-ERR unknown command{CRLF}"),
                         };
                         responses.push(response);
                     }
@@ -56,7 +59,7 @@ async fn main() -> Result<()> {
                 } else {
                     eprintln!("invalid command {commands:?}");
                     stream
-                        .write_all("-ERR invalid request formatting\r\n".as_bytes())
+                        .write_all(format!("-ERR invalid request formatting{CRLF}").as_bytes())
                         .await
                         .unwrap();
                     stream.flush().await.unwrap();
@@ -75,27 +78,27 @@ pub(crate) fn parse(input: &str) -> Result<(DataType, &str)> {
         '+' => {
             // parse simple string
             let (simple_string, rest) = rest
-                .split_once("\r\n")
+                .split_once(CRLF)
                 .expect("missing \\r\\n terminator for simple string");
             (DataType::SimpleString(simple_string.to_string()), rest)
         }
         '$' => {
             let (str_len, rest) = rest
-                .split_once("\r\n")
-                .expect("missing \\r\\n terminator for bulk string");
+                .split_once(CRLF)
+                .expect("missing RESP terminator (`\r\n`) for bulk string");
             let len: usize = str_len.parse().expect("invalid bulk string length");
             println!("bulk string detected. len: {len}");
             let bulk_string = &rest[..len];
             println!("bulk string: {:?}", bulk_string);
             // skip \r\n & panic if not found
             let (crlf, rest) = rest.split_at(len + 2);
-            assert_eq!(crlf, format!("{bulk_string}\r\n"));
+            assert_eq!(crlf, format!("{bulk_string}{CRLF}"));
             (DataType::BulkString(bulk_string.to_string()), rest)
         }
         '*' => {
             let (str_len, mut rest) = rest
-                .split_once("\r\n")
-                .expect("missing \\r\\n terminator for array");
+                .split_once(CRLF)
+                .expect("missing RESP terminator (`\r\n`) terminator for array");
             let len: usize = str_len.parse().expect("invalid array length");
             println!("array detected. len: {len}");
             // recursively parse array elements by \r\n
@@ -172,7 +175,7 @@ mod tests {
         stream.flush().unwrap();
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
-        assert_eq!("+hey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
     }
 
     #[test]
