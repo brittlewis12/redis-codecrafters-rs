@@ -19,9 +19,9 @@ async fn main() -> Result<()> {
     let mut port = 6379;
     let mut mode = Mode::Master;
     let mut urandom = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
-    let mut buffer = [0u8; 40];
+    let mut buffer = [0u8; 20]; // 40 random bytes desired; hex encoding will double the size of the input
     urandom.read_exact(&mut buffer)?;
-    let replid = String::from_utf8_lossy(buffer[..].as_ref()).to_string();
+    let replid = hex::encode(&mut buffer);
     while let Some(arg) = args.next() {
         println!("arg: {arg}");
         match arg.as_str() {
