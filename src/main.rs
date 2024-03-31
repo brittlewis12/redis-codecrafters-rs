@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
             }
         }
         let replconf_port = format!(
-            "*3{CRLF}$7{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{port}{CRLF}",
+            "*3{CRLF}$7{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{CRLF}{port}{CRLF}",
             port_len = port.to_string().len(),
         );
         master
