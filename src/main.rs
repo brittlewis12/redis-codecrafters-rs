@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(ref s) => {
-                    if s.to_lowercase().as_str().is_empty() {
+                    if s.to_lowercase().is_empty() {
                         eprintln!("unexpected response from master: {s}");
                         std::process::exit(1);
                     } else {
