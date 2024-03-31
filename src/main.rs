@@ -191,7 +191,7 @@ async fn main() -> Result<()> {
             .await
             .expect("failed to flush master connection after psync");
 
-        let mut buf = vec![0; 512];
+        let mut buf = vec![0; 4096];
         let len = master
             .read(&mut buf)
             .await
