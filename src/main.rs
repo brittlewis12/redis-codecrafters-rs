@@ -180,6 +180,43 @@ async fn main() -> Result<()> {
             eprintln!("failed to decode replconf capa response from master");
             std::process::exit(1);
         }
+
+        let psync = format!("*3{CRLF}$5{CRLF}PSYNC{CRLF}$1{CRLF}?{CRLF}$2{CRLF}-1{CRLF}");
+        master
+            .write_all(psync.as_bytes())
+            .await
+            .expect("failed to send PSYNC to master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after psync");
+
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read psync response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(ref s) => {
+                    if s.to_lowercase().as_str().is_empty() {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    } else {
+                        // TODO: implement me!
+                        println!("{s}")
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected psync response from master: {resp:?}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            eprintln!("failed to decode psync response from master");
+            std::process::exit(1);
+        }
         println!("replication established with {ip}:{port}");
     } else {
         println!("master_replid: {replid}");
