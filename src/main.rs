@@ -1,26 +1,29 @@
 use std::{
     collections::HashMap,
-    io::Read,
     net::{IpAddr, ToSocketAddrs},
     sync::Arc,
     time::Duration,
 };
 use tokio::{
+    fs::File,
     io::{AsyncReadExt, AsyncWriteExt, Error, Result},
     net::{TcpListener, TcpStream},
     sync::Mutex,
 };
 
 const CRLF: &str = "\r\n";
+const EMPTY_RDB_HEX: &str = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = std::env::args();
     let mut port = 6379;
     let mut mode = Mode::Master;
-    let mut urandom = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
+    let mut urandom = File::open("/dev/urandom")
+        .await
+        .expect("failed to open /dev/urandom");
     let mut buffer = [0u8; 20]; // 40 random bytes desired; hex encoding will double the size of the input
-    urandom.read_exact(&mut buffer)?;
+    urandom.read_exact(&mut buffer).await?;
     let replid = hex::encode(buffer);
     while let Some(arg) = args.next() {
         println!("arg: {arg}");
@@ -269,8 +272,7 @@ async fn main() -> Result<()> {
                 }
                 println!("commands: {:?}", commands);
                 let mut responses = vec![];
-                let commands = commands.into_iter();
-                for command in commands {
+                for command in commands.iter().cloned() {
                     println!("command: {:?}", command);
                     let response = match command {
                         Command::Ping => format!("+PONG{CRLF}"), // TODO: leverage serde, a la serde_bencode -- serde_resp?
@@ -294,13 +296,16 @@ async fn main() -> Result<()> {
                         }
                         Command::Psync(desired_replid, offset) => {
                             println!("got psync for replid {desired_replid} at offset {offset}");
-                            match desired_replid.as_str() {
-                                "?" => {
+
+                            match (desired_replid.as_str(), offset) {
+                                ("?", -1) => {
                                     format!("+FULLRESYNC {replid} 0{CRLF}")
                                 }
                                 unknown => {
                                     // format!("+CONTINUE {replid} {offset}{CRLF}")
-                                    unimplemented!("psync with unexpected replid {unknown}");
+                                    unimplemented!(
+                                        "psync with unexpected replid & offset {unknown:?}"
+                                    );
                                 }
                             }
                         }
@@ -321,7 +326,7 @@ async fn main() -> Result<()> {
                                     println!("queuing expiry for key: {key:?} in {expiry}ms");
                                     tokio::time::sleep(Duration::from_millis(expiry)).await;
                                     let mut db_writable = db.lock().await;
-                                    db_writable.remove(&key);
+                                    db_writable.remove(&key.clone());
                                     println!("expired key: {key:?}");
                                 });
                             }
@@ -339,6 +344,30 @@ async fn main() -> Result<()> {
                         .flush()
                         .await
                         .expect("failed to flush stream after success response");
+                }
+
+                if let Some(Command::Psync(replid, offset)) = &commands.first() {
+                    match (replid.as_str(), offset) {
+                        ("?", -1) => {
+                            println!("handling PSYNC - needs RDB snapshot");
+                            let rdb_snapshot =
+                                hex::decode(EMPTY_RDB_HEX).expect("failed to decode empty rdb hex");
+                            let snapshot_header = format!("${len}{CRLF}", len = rdb_snapshot.len());
+                            stream
+                                .write_all(snapshot_header.as_bytes())
+                                .await
+                                .expect("failed to write rdb snapshot header to stream");
+                            stream
+                                .write_all(&rdb_snapshot)
+                                .await
+                                .expect("failed to write rdb snapshot to stream");
+                            stream
+                                .flush()
+                                .await
+                                .expect("failed to flush stream after rdb snapshot");
+                        }
+                        unknown => unimplemented!("unexpected psync replid & offset: {unknown:?}"),
+                    }
                 }
             }
         });
@@ -567,7 +596,7 @@ impl std::fmt::Display for Mode {
 }
 
 /// Redis commands
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Command {
     /// PING
     Ping,
