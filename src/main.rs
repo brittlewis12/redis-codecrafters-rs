@@ -292,6 +292,9 @@ async fn main() -> Result<()> {
                             let info = format!("# Replication\nrole:{mode}\nconnected_slaves:1\nmaster_replid:{replid}\nmaster_repl_offset:0");
                             format!("${len}{CRLF}{info}{CRLF}", len = info.len())
                         }
+                        Command::ReplConf => {
+                            format!("+OK{CRLF}")
+                        }
                         Command::Set(key, val, expiry) => {
                             let db = db.clone();
                             let mut db_writable = db.lock().await;
@@ -381,6 +384,11 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                                 }
                             }
                             Command::Info(sections)
+                        }
+                        "replconf" => {
+                            let key = iter.next().expect("missing REPLCONF argument");
+                            let val = iter.next().expect("missing REPLCONF argument value");
+                            Command::ReplConf
                         }
                         "set" => {
                             let key = iter.next().expect("missing SET key");
@@ -536,6 +544,8 @@ pub(crate) enum Command {
     Get(String),
     /// INFO
     Info(Vec<String>),
+    /// REPLCONF
+    ReplConf,
     /// SET key value [PX milliseconds]
     Set(String, String, Option<u64>),
 }
@@ -685,6 +695,20 @@ mod tests {
             "$120\r\n# Replication\nrole:master\nconnected_slaves:1\nmaster_replid:b00e90ac8e9e7d93d4bc91d17670fb0b44dcb10b\nmaster_repl_offset:0\r\n",
             String::from_utf8_lossy(&mut buf[..len])
         );
+    }
+
+    #[test]
+    fn test_replconf() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*3\r\n$8\r\nreplconf\r\n$14\r\nlistening-port\r\n$4\r\n1234\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
     }
 
     #[test]
