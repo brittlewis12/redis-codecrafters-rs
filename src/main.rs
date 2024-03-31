@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     let mut urandom = std::fs::File::open("/dev/urandom").expect("failed to open /dev/urandom");
     let mut buffer = [0u8; 20]; // 40 random bytes desired; hex encoding will double the size of the input
     urandom.read_exact(&mut buffer)?;
-    let replid = hex::encode(&mut buffer);
+    let replid = hex::encode(buffer);
     while let Some(arg) = args.next() {
         println!("arg: {arg}");
         match arg.as_str() {
@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
             .expect("failed to connect to master");
         let ping_handshake = format!("*1{CRLF}$4{CRLF}ping{CRLF}");
         master
-            .write_all(format!("{ping_handshake}").as_bytes())
+            .write_all(ping_handshake.as_bytes())
             .await
             .expect("failed initiate handshake with master");
         master
