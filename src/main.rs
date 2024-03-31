@@ -7,7 +7,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Error, Result},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     sync::Mutex,
 };
 
@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
     );
 
     if let Mode::Replica(ip, port) = mode {
-        let mut master = tokio::net::TcpStream::connect((ip, port))
+        let mut master = TcpStream::connect((ip, port))
             .await
             .expect("failed to connect to master");
         let ping_handshake = format!("*1{CRLF}$4{CRLF}ping{CRLF}");
@@ -95,11 +95,11 @@ async fn main() -> Result<()> {
             .read(&mut buf)
             .await
             .expect("failed to read ping handshake response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         master
             .flush()
             .await
             .expect("failed to flush master connection after reading ping response");
-        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
@@ -132,10 +132,10 @@ async fn main() -> Result<()> {
             .read(&mut buf)
             .await
             .expect("failed to read replconf listening-port response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         master.flush().await.expect(
             "failed to flush master connection after reading replconf listening-port response",
         );
-        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
@@ -167,11 +167,11 @@ async fn main() -> Result<()> {
             .read(&mut buf)
             .await
             .expect("failed to read replconf capa response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         master
             .flush()
             .await
             .expect("failed to flush master connection after reading replconf capa response");
-        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
