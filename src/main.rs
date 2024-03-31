@@ -192,14 +192,14 @@ async fn main() -> Result<()> {
             .expect("failed to flush master connection after psync");
 
         let mut buf = vec![0; 4096];
-        master
+        let len = master
             .read(&mut buf)
             .await
             .expect("failed to read psync response from master");
-        let resp = std::str::from_utf8(&buf[..]).expect("invalid utf8 string");
-        if let Ok((resp, _)) = decode_resp(resp) {
+        let resp = String::from_utf8_lossy(&buf[..len]).to_string();
+        if let Ok((resp, _)) = decode_resp(resp.as_str()) {
             match resp {
-                DataType::SimpleString(ref s) => {
+                DataType::BulkString(ref s) | DataType::SimpleString(ref s) => {
                     if s.to_lowercase().is_empty() {
                         eprintln!("unexpected response from master: {s}");
                         std::process::exit(1);
