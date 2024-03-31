@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::Read,
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, ToSocketAddrs},
     sync::Arc,
     time::Duration,
 };
@@ -42,26 +42,25 @@ async fn main() -> Result<()> {
                 println!("port: {port}");
             }
             "--replicaof" => {
-                // TODO: maybe ToSocketAddrs is a nicer API for this?
                 let master_host = args.next().expect("missing master host argument");
-                let master_host = master_host.parse::<IpAddr>().unwrap_or_else(|_| {
-                    // eprintln!("invalid master host argument: {master_host}");
-                    // std::process::exit(1);
-                    match master_host.as_str() {
-                        "localhost" => IpAddr::V4(Ipv4Addr::LOCALHOST),
-                        _ => {
-                            eprintln!("invalid master host argument: {master_host}");
-                            std::process::exit(1);
-                        }
-                    }
-                });
                 let master_port = args
                     .next()
                     .expect("missing master port argument")
                     .parse::<u16>()
                     .expect("invalid master port argument");
-                println!("replicaof: {master_host}:{master_port}");
-                mode = Mode::Replica(master_host, master_port);
+                let addr = format!("{master_host}:{master_port}")
+                    .to_socket_addrs()
+                    .unwrap_or_else(|e| {
+                        eprintln!("invalid master host argument: {master_host} ({e})");
+                        std::process::exit(1);
+                    })
+                    .next()
+                    .unwrap_or_else(|| {
+                        eprintln!("invalid master host argument: {master_host}");
+                        std::process::exit(1);
+                    });
+                println!("replicaof: {addr:?}");
+                mode = Mode::Replica(addr.ip(), addr.port());
             }
             _ => {
                 eprintln!("ignoring unknown argument: {arg}");
