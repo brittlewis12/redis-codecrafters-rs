@@ -95,11 +95,15 @@ async fn main() -> Result<()> {
             .read(&mut buf)
             .await
             .expect("failed to read ping handshake response from master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after reading ping response");
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
-                    if s != "PONG" {
+                    if s.to_lowercase().as_str() != "pong" {
                         eprintln!("unexpected response from master: {s}");
                         std::process::exit(1);
                     }
@@ -110,7 +114,79 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        println!("replicating from {ip}:{port}");
+        let replconf_port = format!(
+            "*3{CRLF}$7{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{port}{CRLF}",
+            port_len = port.to_string().len(),
+        );
+        master
+            .write_all(replconf_port.as_bytes())
+            .await
+            .expect("failed to send REPLCONF listening-port to master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after replconf listening-port");
+
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read replconf listening-port response from master");
+        master.flush().await.expect(
+            "failed to flush master connection after reading replconf listening-port response",
+        );
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(s) => {
+                    if s.to_lowercase().as_str() != "ok" {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected replconf listening-port response from master: {resp:?}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        let replconf_capa =
+            format!("*3{CRLF}$7{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
+        master
+            .write_all(replconf_capa.as_bytes())
+            .await
+            .expect("failed to send REPLCONF capa to master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after replconf capa");
+
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read replconf capa response from master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after reading replconf capa response");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(s) => {
+                    if s.to_lowercase().as_str() != "ok" {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected replconf capa response from master: {resp:?}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        println!("replication established with {ip}:{port}");
     } else {
         println!("master_replid: {replid}");
     }
