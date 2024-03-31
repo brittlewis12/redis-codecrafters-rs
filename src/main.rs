@@ -109,10 +109,6 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        master
-            .flush()
-            .await
-            .expect("failed to flush master connection after reading ping response");
         let replconf_port = format!(
             "*3{CRLF}$7{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{port}{CRLF}",
             port_len = port.to_string().len(),
@@ -146,9 +142,6 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        master.flush().await.expect(
-            "failed to flush master connection after reading replconf listening-port response",
-        );
 
         let replconf_capa =
             format!("*3{CRLF}$7{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
@@ -181,10 +174,6 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        master
-            .flush()
-            .await
-            .expect("failed to flush master connection after reading replconf capa response");
         println!("replication established with {ip}:{port}");
     } else {
         println!("master_replid: {replid}");
