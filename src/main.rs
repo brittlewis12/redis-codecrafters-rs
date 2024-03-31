@@ -76,8 +76,8 @@ async fn main() -> Result<()> {
         listener.local_addr().expect("failed to read local address")
     );
 
-    if let Mode::Replica(ip, port) = mode {
-        let mut master = TcpStream::connect((ip, port))
+    if let Mode::Replica(ip, master_port) = mode {
+        let mut master = TcpStream::connect((ip, master_port))
             .await
             .expect("failed to connect to master");
         let ping_handshake = format!("*1{CRLF}$4{CRLF}ping{CRLF}");
@@ -97,7 +97,7 @@ async fn main() -> Result<()> {
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
-                DataType::SimpleString(s) => {
+                DataType::SimpleString(ref s) => {
                     if s.to_lowercase().as_str() != "pong" {
                         eprintln!("unexpected response from master: {s}");
                         std::process::exit(1);
@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
             }
         }
         let replconf_port = format!(
-            "*3{CRLF}$7{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{CRLF}{port}{CRLF}",
+            "*3{CRLF}$8{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{CRLF}{port}{CRLF}",
             port_len = port.to_string().len(),
         );
         master
@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
-                DataType::SimpleString(s) => {
+                DataType::SimpleString(ref s) => {
                     if s.to_lowercase().as_str() != "ok" {
                         eprintln!("unexpected response from master: {s}");
                         std::process::exit(1);
@@ -141,10 +141,13 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+        } else {
+            eprintln!("failed to decode replconf listening-port response from master");
+            std::process::exit(1);
         }
 
         let replconf_capa =
-            format!("*3{CRLF}$7{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
+            format!("*3{CRLF}$8{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
         master
             .write_all(replconf_capa.as_bytes())
             .await
@@ -162,7 +165,7 @@ async fn main() -> Result<()> {
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
-                DataType::SimpleString(s) => {
+                DataType::SimpleString(ref s) => {
                     if s.to_lowercase().as_str() != "ok" {
                         eprintln!("unexpected response from master: {s}");
                         std::process::exit(1);
@@ -173,6 +176,9 @@ async fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+        } else {
+            eprintln!("failed to decode replconf capa response from master");
+            std::process::exit(1);
         }
         println!("replication established with {ip}:{port}");
     } else {
@@ -417,7 +423,7 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
     // check first byte. we'll handle +, $, * for now.
     let (first_byte, rest) = input.split_at(1);
     let first_char = first_byte.chars().next().expect("unexpected empty string");
-    println!("first char: {}", &first_char);
+    println!("first char: {first_char}, rest: {rest}");
     let data = match first_char {
         '+' => {
             // parse simple string
@@ -639,7 +645,7 @@ mod tests {
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
         assert_eq!(
-            "$44\r\n# Replication\nrole:master\nconnected_slaves:0\r\n",
+            "$120\r\n# Replication\nrole:master\nconnected_slaves:1\nmaster_replid:b00e90ac8e9e7d93d4bc91d17670fb0b44dcb10b\nmaster_repl_offset:0\r\n",
             String::from_utf8_lossy(&mut buf[..len])
         );
     }
