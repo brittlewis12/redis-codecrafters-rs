@@ -78,7 +78,38 @@ async fn main() -> Result<()> {
     );
 
     if let Mode::Replica(ip, port) = mode {
-        // TODO: implement replication connection
+        let mut master = tokio::net::TcpStream::connect((ip, port))
+            .await
+            .expect("failed to connect to master");
+        let ping_handshake = format!("*1{CRLF}$4{CRLF}ping{CRLF}");
+        master
+            .write_all(format!("{ping_handshake}").as_bytes())
+            .await
+            .expect("failed initiate handshake with master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after ping");
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read ping handshake response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(s) => {
+                    if s != "PONG" {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected handshake response from master: {resp:?}");
+                    std::process::exit(1);
+                }
+            }
+        }
         println!("replicating from {ip}:{port}");
     } else {
         println!("master_replid: {replid}");
