@@ -96,10 +96,6 @@ async fn main() -> Result<()> {
             .await
             .expect("failed to read ping handshake response from master");
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
-        master
-            .flush()
-            .await
-            .expect("failed to flush master connection after reading ping response");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
@@ -114,6 +110,10 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after reading ping response");
         let replconf_port = format!(
             "*3{CRLF}$7{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{port}{CRLF}",
             port_len = port.to_string().len(),
@@ -133,9 +133,6 @@ async fn main() -> Result<()> {
             .await
             .expect("failed to read replconf listening-port response from master");
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
-        master.flush().await.expect(
-            "failed to flush master connection after reading replconf listening-port response",
-        );
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
@@ -150,6 +147,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        master.flush().await.expect(
+            "failed to flush master connection after reading replconf listening-port response",
+        );
 
         let replconf_capa =
             format!("*3{CRLF}$7{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
@@ -168,10 +168,6 @@ async fn main() -> Result<()> {
             .await
             .expect("failed to read replconf capa response from master");
         let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
-        master
-            .flush()
-            .await
-            .expect("failed to flush master connection after reading replconf capa response");
         if let Ok((resp, _)) = decode_resp(resp) {
             match resp {
                 DataType::SimpleString(s) => {
@@ -186,6 +182,10 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after reading replconf capa response");
         println!("replication established with {ip}:{port}");
     } else {
         println!("master_replid: {replid}");
