@@ -386,8 +386,8 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                             Command::Info(sections)
                         }
                         "replconf" => {
-                            let key = iter.next().expect("missing REPLCONF argument");
-                            let val = iter.next().expect("missing REPLCONF argument value");
+                            let _key = iter.next().expect("missing REPLCONF argument");
+                            let _val = iter.next().expect("missing REPLCONF argument value");
                             Command::ReplConf
                         }
                         "set" => {
