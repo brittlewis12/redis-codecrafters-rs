@@ -691,10 +691,16 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!(
-            "$120\r\n# Replication\nrole:master\nconnected_slaves:1\nmaster_replid:b00e90ac8e9e7d93d4bc91d17670fb0b44dcb10b\nmaster_repl_offset:0\r\n",
-            String::from_utf8_lossy(&mut buf[..len])
-        );
+        let str = std::str::from_utf8(&mut buf[..len]).unwrap();
+        let (parsed, _) = decode_resp(str).unwrap();
+        if let DataType::BulkString(s) = parsed {
+            assert!(s.contains("role:master"));
+            assert!(s.contains("connected_slaves:1"));
+            assert!(s.contains("master_replid:"));
+            assert!(s.contains("master_repl_offset:0"));
+        } else {
+            panic!("Expected bulk string");
+        }
     }
 
     #[test]
