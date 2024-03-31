@@ -292,6 +292,18 @@ async fn main() -> Result<()> {
                             let info = format!("# Replication\nrole:{mode}\nconnected_slaves:1\nmaster_replid:{replid}\nmaster_repl_offset:0");
                             format!("${len}{CRLF}{info}{CRLF}", len = info.len())
                         }
+                        Command::Psync(desired_replid, offset) => {
+                            println!("got psync for replid {desired_replid} at offset {offset}");
+                            match desired_replid.as_str() {
+                                "?" => {
+                                    format!("+FULLRESYNC {replid} 0{CRLF}")
+                                }
+                                unknown => {
+                                    // format!("+CONTINUE {replid} {offset}{CRLF}")
+                                    unimplemented!("psync with unexpected replid {unknown}");
+                                }
+                            }
+                        }
                         Command::ReplConf => {
                             format!("+OK{CRLF}")
                         }
@@ -384,6 +396,27 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                                 }
                             }
                             Command::Info(sections)
+                        }
+                        "psync" => {
+                            if let DataType::BulkString(replication_id) =
+                                iter.next().expect("missing PSYNC replication_id")
+                            {
+                                if let DataType::BulkString(offset) =
+                                    iter.next().expect("missing PSYNC offset")
+                                {
+                                    let offset =
+                                        offset.parse::<i64>().expect("invalid PSYNC offset");
+                                    Command::Psync(replication_id, offset)
+                                } else {
+                                    return Err(Error::other(
+                                        "invalid RESP `PSYNC` offset".to_string(),
+                                    ));
+                                }
+                            } else {
+                                return Err(Error::other(
+                                    "invalid RESP `PSYNC` replication_id".to_string(),
+                                ));
+                            }
                         }
                         "replconf" => {
                             let _key = iter.next().expect("missing REPLCONF argument");
@@ -544,6 +577,8 @@ pub(crate) enum Command {
     Get(String),
     /// INFO
     Info(Vec<String>),
+    /// PSYNC
+    Psync(String, i64),
     /// REPLCONF
     ReplConf,
     /// SET key value [PX milliseconds]
@@ -715,6 +750,27 @@ mod tests {
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
         assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+    }
+
+    #[test]
+    fn test_psync() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*3\r\n$5\r\npsync\r\n$1\r\n?\r\n$2\r\n-1\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        let str = std::str::from_utf8(&mut buf[..len]).unwrap();
+        let (parsed, _) = decode_resp(str).unwrap();
+        if let DataType::SimpleString(s) = parsed {
+            assert!(s.starts_with("FULLRESYNC"));
+            assert!(s.contains(" 0"));
+        } else {
+            panic!("Expected simple string, got {parsed:?}");
+        }
     }
 
     #[test]
