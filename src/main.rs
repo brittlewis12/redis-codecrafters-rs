@@ -311,31 +311,18 @@ async fn main() -> Result<()> {
                             let guard = stream.lock().await;
                             let socket = guard.peer_addr().expect("failed to get peer address");
                             let (host, port) = (socket.ip(), socket.port());
+                            println!("client: {host}:{port} wants to psync to {desired_replid} at {offset}");
                             drop(guard);
-                            let mut replication_clients = pending_replication_clients.lock().await;
-                            match replication_clients.get_mut(&(host, port)) {
-                                Some(client) => {
-                                    if let ReplicationState::Handshake = client.state {
-                                        match (desired_replid.as_str(), offset) {
-                                            ("?", -1) => {
-                                                client.state = ReplicationState::Sync;
-                                                format!("+FULLRESYNC {replid} 0{CRLF}")
-                                            }
-                                            unknown => {
-                                                // format!("+CONTINUE {replid} {offset}{CRLF}")
-                                                unimplemented!("psync with unexpected replid & offset {unknown:?}");
-                                            }
-                                        }
-                                    } else {
-                                        eprintln!("received REPLCONF capa psync2 from client in invalid state");
-                                        format!("-ERR invalid state{CRLF}")
-                                    }
+                            match (desired_replid.as_str(), offset) {
+                                ("?", -1) => {
+                                    // client.state = ReplicationState::Sync;
+                                    format!("+FULLRESYNC {replid} 0{CRLF}")
                                 }
-                                None => {
-                                    eprintln!(
-                                        "received REPLCONF capa psync2 from unregistered client"
+                                unknown => {
+                                    // format!("+CONTINUE {replid} {offset}{CRLF}")
+                                    unimplemented!(
+                                        "psync with unexpected replid & offset {unknown:?}"
                                     );
-                                    format!("-ERR unregistered client{CRLF}")
                                 }
                             }
                         }
@@ -363,22 +350,9 @@ async fn main() -> Result<()> {
                                 let guard = stream.lock().await;
                                 let socket = guard.peer_addr().expect("failed to get peer address");
                                 let (host, port) = (socket.ip(), socket.port());
+                                println!("client: {host}:{port} has capa psync2");
                                 drop(guard);
-                                let replication_clients = pending_replication_clients.lock().await;
-                                match replication_clients.get(&(host, port)) {
-                                    Some(client) => {
-                                        if let ReplicationState::Handshake = client.state {
-                                            format!("+OK{CRLF}")
-                                        } else {
-                                            eprintln!("received REPLCONF capa psync2 from client in invalid state");
-                                            format!("-ERR invalid state{CRLF}")
-                                        }
-                                    }
-                                    None => {
-                                        eprintln!("received REPLCONF capa psync2 from unregistered client");
-                                        format!("-ERR unregistered client{CRLF}")
-                                    }
-                                }
+                                format!("+OK{CRLF}")
                             }
                             unknown => {
                                 unimplemented!("replconf with unexpected arg & val {unknown:?}");
@@ -447,67 +421,36 @@ async fn main() -> Result<()> {
                     let socket = guard.peer_addr().expect("failed to get peer address");
                     let (host, port) = (socket.ip(), socket.port());
                     let mut replication_clients = pending_replication_clients.lock().await;
-                    match replication_clients.get_mut(&(host, port)) {
-                        Some(client) => {
-                            if let ReplicationState::Sync = client.state {
-                                match (replid.as_str(), offset) {
-                                    ("?", -1) => {
-                                        println!("handling PSYNC - needs RDB snapshot");
-                                        let rdb_snapshot = hex::decode(EMPTY_RDB_HEX)
-                                            .expect("failed to decode empty rdb hex");
-                                        let snapshot_header =
-                                            format!("${len}{CRLF}", len = rdb_snapshot.len());
-                                        guard.write_all(snapshot_header.as_bytes()).await.expect(
-                                            "failed to write rdb snapshot header to stream",
-                                        );
-                                        guard
-                                            .write_all(&rdb_snapshot)
-                                            .await
-                                            .expect("failed to write rdb snapshot to stream");
-                                        guard
-                                            .flush()
-                                            .await
-                                            .expect("failed to flush stream after rdb snapshot");
-                                        let connected_client = ReplicationClient {
-                                            listening_host: client.listening_host,
-                                            listening_port: client.listening_port,
-                                            state: ReplicationState::Connected,
-                                            stream: Some(stream.clone()),
-                                        };
-                                        replication_clients.remove(&(host, port));
-                                        let mut connected_replication_clients =
-                                            connected_replication_clients.lock().await;
-                                        connected_replication_clients.push(connected_client);
-                                    }
-                                    unknown => unimplemented!(
-                                        "unexpected psync replid & offset: {unknown:?}"
-                                    ),
-                                }
-                            } else {
-                                eprintln!("received PSYNC from client in invalid state");
-                                guard
-                                    .write_all("-ERR invalid state{CRLF}".as_bytes())
-                                    .await
-                                    .expect("failed to write error response to stream");
-                                guard
-                                    .flush()
-                                    .await
-                                    .expect("failed to flush stream after error response");
-                                break;
-                            }
-                        }
-                        None => {
-                            eprintln!("received PSYNC from unregistered client");
+                    match (replid.as_str(), offset) {
+                        ("?", -1) => {
+                            println!("handling PSYNC - needs RDB snapshot");
+                            let rdb_snapshot =
+                                hex::decode(EMPTY_RDB_HEX).expect("failed to decode empty rdb hex");
+                            let snapshot_header = format!("${len}{CRLF}", len = rdb_snapshot.len());
                             guard
-                                .write_all("-ERR unregistered client{CRLF}".as_bytes())
+                                .write_all(snapshot_header.as_bytes())
                                 .await
-                                .expect("failed to write error response to stream");
+                                .expect("failed to write rdb snapshot header to stream");
+                            guard
+                                .write_all(&rdb_snapshot)
+                                .await
+                                .expect("failed to write rdb snapshot to stream");
                             guard
                                 .flush()
                                 .await
-                                .expect("failed to flush stream after error response");
-                            break;
+                                .expect("failed to flush stream after rdb snapshot");
+                            let connected_client = ReplicationClient {
+                                listening_host: host,
+                                listening_port: port,
+                                state: ReplicationState::Connected,
+                                stream: Some(stream.clone()),
+                            };
+                            replication_clients.remove(&(host, port)); // this probably wont exist if these guys send from a random port
+                            let mut connected_replication_clients =
+                                connected_replication_clients.lock().await;
+                            connected_replication_clients.push(connected_client);
                         }
+                        unknown => unimplemented!("unexpected psync replid & offset: {unknown:?}"),
                     }
                 }
             }
@@ -963,7 +906,6 @@ mod tests {
 
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
-        stream.flush().unwrap();
         let str = std::str::from_utf8(&mut buf[..len]).unwrap();
         let (parsed, _) = decode_resp(str).unwrap();
         if let DataType::SimpleString(s) = parsed {
