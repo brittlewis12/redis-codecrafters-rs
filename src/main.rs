@@ -286,6 +286,45 @@ async fn main() -> Result<()> {
                     println!("command: {:?}", command);
                     let response = match command {
                         Command::Ping => format!("+PONG{CRLF}"), // TODO: leverage serde, a la serde_bencode -- serde_resp?
+                        Command::Del(keys) => {
+                            let mut db = db.lock().await;
+                            let mut count = 0;
+                            for key in keys {
+                                match db.remove(&key) {
+                                    Some(_) => count += 1,
+                                    None => (),
+                                }
+                            }
+                            let connected_replication_clients =
+                                connected_replication_clients.lock().await;
+                            if !connected_replication_clients.is_empty() {
+                                for mut client in connected_replication_clients.iter().cloned() {
+                                    let input = String::from(input);
+                                    println!(
+                                        "replicating del command to slave {client:?}: {input:?}",
+                                        client = (client.listening_host, client.listening_port)
+                                    );
+                                    tokio::task::spawn(async move {
+                                        let mut guard = client
+                                            .stream
+                                            .as_mut()
+                                            .expect(
+                                                "missing stream for connected replication client",
+                                            )
+                                            .lock()
+                                            .await;
+                                        guard.write_all(input.as_bytes()).await.expect(
+                                            "failed to write del command to replication client",
+                                        );
+                                        guard
+                                            .flush()
+                                            .await
+                                            .expect("failed to flush stream after writing del command to replication client");
+                                    });
+                                }
+                            }
+                            format!(":{count}{CRLF}")
+                        }
                         Command::Echo(echo_value) => {
                             let len = echo_value.len();
                             format!("${len}{CRLF}{echo_value}{CRLF}")
@@ -381,6 +420,10 @@ async fn main() -> Result<()> {
                             if !connected_replication_clients.is_empty() {
                                 for mut client in connected_replication_clients.iter().cloned() {
                                     let input = String::from(input);
+                                    println!(
+                                        "replicating set command to slave {client:?}: {input:?}",
+                                        client = (client.listening_host, client.listening_port)
+                                    );
                                     tokio::task::spawn(async move {
                                         let mut guard = client
                                             .stream
@@ -469,6 +512,22 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                     // TODO: test this case insensitivity!
                     let command = match s.to_lowercase().as_str() {
                         "ping" => Command::Ping,
+                        "del" => {
+                            let mut keys: Vec<String> = vec![];
+                            while let Some(key) = iter.next() {
+                                match key {
+                                    DataType::BulkString(key) | DataType::SimpleString(key) => {
+                                        keys.push(key);
+                                    }
+                                    _ => {
+                                        return Err(Error::other(format!(
+                                            "invalid RESP `DEL` key {key:?}"
+                                        )))
+                                    }
+                                }
+                            }
+                            Command::Del(keys)
+                        }
                         "echo" => {
                             let echo_value = iter.next().expect("missing ECHO value");
                             match echo_value {
@@ -715,6 +774,8 @@ impl std::fmt::Display for Mode {
 pub(crate) enum Command {
     /// PING
     Ping,
+    /// DEL key
+    Del(Vec<String>),
     /// ECHO message
     Echo(String),
     /// GET key
@@ -808,6 +869,50 @@ mod tests {
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
         assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+    }
+
+    #[test]
+    fn test_del() {
+        let mut stream = TcpStream::connect("127.0.0.1:6379").unwrap();
+        stream
+            .write_all(b"*3\r\n$3\r\nset\r\n$5\r\nshort\r\n$3\r\nsup\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+
+        stream
+            .write_all(b"*2\r\n$3\r\nget\r\n$5\r\nshort\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("$3\r\nsup\r\n", String::from_utf8_lossy(&mut buf[..len]));
+
+        stream
+            .write_all(b"*2\r\n$3\r\ndel\r\n$5\r\nshort\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!(":1\r\n", String::from_utf8_lossy(&mut buf[..len]));
+
+        stream
+            .write_all(b"*2\r\n$3\r\nget\r\n$5\r\nshort\r\n")
+            .unwrap();
+        stream.flush().unwrap();
+
+        let mut buf = vec![0; 512];
+        let len = stream.read(&mut buf).unwrap();
+        stream.flush().unwrap();
+        assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
     }
 
     #[test]
