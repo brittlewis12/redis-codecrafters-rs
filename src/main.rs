@@ -300,11 +300,12 @@ async fn main() -> Result<()> {
                             if !connected_replication_clients.is_empty() {
                                 for mut client in connected_replication_clients.iter().cloned() {
                                     let input = String::from(input);
-                                    println!(
+                                    let mut client = client.clone();
+                                    tokio::task::spawn(async move {
+                                        println!(
                                         "replicating del command to slave {client:?}: {input:?}",
                                         client = (client.listening_host, client.listening_port)
                                     );
-                                    tokio::task::spawn(async move {
                                         let mut guard = client
                                             .stream
                                             .as_mut()
@@ -420,11 +421,12 @@ async fn main() -> Result<()> {
                             if !connected_replication_clients.is_empty() {
                                 for mut client in connected_replication_clients.iter().cloned() {
                                     let input = String::from(input);
-                                    println!(
+                                    let mut client = client.clone();
+                                    tokio::task::spawn(async move {
+                                        println!(
                                         "replicating set command to slave {client:?}: {input:?}",
                                         client = (client.listening_host, client.listening_port)
                                     );
-                                    tokio::task::spawn(async move {
                                         let mut guard = client
                                             .stream
                                             .as_mut()
