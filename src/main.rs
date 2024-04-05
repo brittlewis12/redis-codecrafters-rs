@@ -290,15 +290,14 @@ async fn main() -> Result<()> {
                             let mut db = db.lock().await;
                             let mut count = 0;
                             for key in keys {
-                                match db.remove(&key) {
-                                    Some(_) => count += 1,
-                                    None => (),
+                                if db.remove(&key).is_some() {
+                                    count += 1;
                                 }
                             }
                             let connected_replication_clients =
                                 connected_replication_clients.lock().await;
                             if !connected_replication_clients.is_empty() {
-                                for mut client in connected_replication_clients.iter().cloned() {
+                                for client in connected_replication_clients.iter() {
                                     let input = String::from(input);
                                     let mut client = client.clone();
                                     tokio::task::spawn(async move {
@@ -419,7 +418,7 @@ async fn main() -> Result<()> {
                             let connected_replication_clients =
                                 connected_replication_clients.lock().await;
                             if !connected_replication_clients.is_empty() {
-                                for mut client in connected_replication_clients.iter().cloned() {
+                                for client in connected_replication_clients.iter() {
                                     let input = String::from(input);
                                     let mut client = client.clone();
                                     tokio::task::spawn(async move {
@@ -516,7 +515,7 @@ pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
                         "ping" => Command::Ping,
                         "del" => {
                             let mut keys: Vec<String> = vec![];
-                            while let Some(key) = iter.next() {
+                            for key in iter.by_ref() {
                                 match key {
                                     DataType::BulkString(key) | DataType::SimpleString(key) => {
                                         keys.push(key);
