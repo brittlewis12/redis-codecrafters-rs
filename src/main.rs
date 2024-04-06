@@ -496,6 +496,7 @@ async fn main() -> Result<()> {
                         }
                         unknown => unimplemented!("unexpected psync replid & offset: {unknown:?}"),
                     }
+                    break;
                 }
             }
         });
