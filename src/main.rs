@@ -376,7 +376,7 @@ async fn main() -> Result<()> {
                                 let client = ReplicationClient {
                                     listening_port: port,
                                     listening_host: host,
-                                    state: ReplicationState::Handshake,
+                                    // state: ReplicationState::Handshake,
                                     stream: None,
                                 };
                                 pending_replication_clients
@@ -486,7 +486,7 @@ async fn main() -> Result<()> {
                             let connected_client = ReplicationClient {
                                 listening_host: host,
                                 listening_port: port,
-                                state: ReplicationState::Connected,
+                                // state: ReplicationState::Connected,
                                 stream: Some(stream.clone()),
                             };
                             replication_clients.remove(&(host, port)); // this probably wont exist if these guys send from a random port
@@ -744,16 +744,16 @@ pub(crate) fn decode_resp(input: &str) -> Result<(DataType, &str)> {
 struct ReplicationClient {
     listening_port: u16,
     listening_host: IpAddr,
-    state: ReplicationState,
+    // state: ReplicationState,
     stream: Option<Arc<Mutex<TcpStream>>>,
 }
 
-#[derive(Copy, Clone)]
-enum ReplicationState {
-    Handshake,
-    Sync,
-    Connected,
-}
+// #[derive(Copy, Clone)]
+// enum ReplicationState {
+//     Handshake,
+//     Sync,
+//     Connected,
+// }
 
 /// Server replication modes
 #[derive(Copy, Clone)]
