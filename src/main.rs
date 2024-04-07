@@ -846,7 +846,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&buf[..len]));
     }
 
     #[test]
@@ -860,7 +860,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&buf[..len]));
 
         stream
             .write_all(b"*2\r\n$3\r\nget\r\n$3\r\nmsg\r\n")
@@ -870,7 +870,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&buf[..len]));
     }
 
     #[test]
@@ -884,7 +884,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&buf[..len]));
 
         stream
             .write_all(b"*2\r\n$3\r\nget\r\n$5\r\nshort\r\n")
@@ -894,7 +894,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$3\r\nsup\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$3\r\nsup\r\n", String::from_utf8_lossy(&buf[..len]));
 
         stream
             .write_all(b"*2\r\n$3\r\ndel\r\n$5\r\nshort\r\n")
@@ -904,7 +904,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!(":1\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!(":1\r\n", String::from_utf8_lossy(&buf[..len]));
 
         stream
             .write_all(b"*2\r\n$3\r\nget\r\n$5\r\nshort\r\n")
@@ -914,7 +914,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$-1\r\n", String::from_utf8_lossy(&buf[..len]));
     }
 
     #[test]
@@ -928,7 +928,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&buf[..len]));
 
         stream
             .write_all(b"*2\r\n$3\r\nget\r\n$3\r\ntmp\r\n")
@@ -938,7 +938,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$3\r\nhey\r\n", String::from_utf8_lossy(&buf[..len]));
 
         std::thread::sleep(Duration::from_millis(100));
 
@@ -950,7 +950,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$-1\r\n", String::from_utf8_lossy(&buf[..len]));
     }
 
     #[test]
@@ -964,7 +964,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("$-1\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("$-1\r\n", String::from_utf8_lossy(&buf[..len]));
     }
 
     #[test]
@@ -977,7 +977,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        let str = std::str::from_utf8(&mut buf[..len]).unwrap();
+        let str = std::str::from_utf8(&buf[..len]).unwrap();
         let (parsed, _) = decode_resp(str).unwrap();
         if let DataType::BulkString(s) = parsed {
             assert!(s.contains("role:master"));
@@ -1000,7 +1000,7 @@ mod tests {
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
         stream.flush().unwrap();
-        assert_eq!("+OK\r\n", String::from_utf8_lossy(&mut buf[..len]));
+        assert_eq!("+OK\r\n", String::from_utf8_lossy(&buf[..len]));
     }
 
     #[test]
@@ -1013,7 +1013,7 @@ mod tests {
 
         let mut buf = vec![0; 512];
         let len = stream.read(&mut buf).unwrap();
-        let str = std::str::from_utf8(&mut buf[..len]).unwrap();
+        let str = std::str::from_utf8(&buf[..len]).unwrap();
         let (parsed, _) = decode_resp(str).unwrap();
         if let DataType::SimpleString(s) = parsed {
             assert!(s.starts_with("FULLRESYNC"));
