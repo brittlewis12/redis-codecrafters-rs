@@ -9,6 +9,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, Error, Result},
     net::{TcpListener, TcpStream},
     sync::Mutex,
+    task,
 };
 
 const CRLF: &str = "\r\n";
@@ -160,7 +161,7 @@ async fn main() -> Result<()> {
                                 for client in connected_replication_clients.iter() {
                                     let input = String::from(input);
                                     let mut client = client.clone();
-                                    tokio::task::spawn(async move {
+                                    task::spawn(async move {
                                         println!(
                                         "replicating del command to slave {client:?}: {input:?}",
                                         client = (client.listening_host, client.listening_port)
@@ -267,7 +268,7 @@ async fn main() -> Result<()> {
                             drop(db_writable);
                             if let Some(expiry) = expiry {
                                 let db = db.clone();
-                                tokio::task::spawn(async move {
+                                task::spawn(async move {
                                     println!("queuing expiry for key: {key:?} in {expiry}ms");
                                     tokio::time::sleep(Duration::from_millis(expiry)).await;
                                     let mut db_writable = db.lock().await;
@@ -281,7 +282,7 @@ async fn main() -> Result<()> {
                                 for client in connected_replication_clients.iter() {
                                     let input = String::from(input);
                                     let mut client = client.clone();
-                                    tokio::task::spawn(async move {
+                                    task::spawn(async move {
                                         println!(
                                         "replicating set command to slave {client:?}: {input:?}",
                                         client = (client.listening_host, client.listening_port)
@@ -364,147 +365,149 @@ async fn main() -> Result<()> {
 }
 
 pub(crate) async fn handle_replication_mode(ip: IpAddr, master_port: u16, port: u16) {
-    let mut master = TcpStream::connect((ip, master_port))
-        .await
-        .expect("failed to connect to master");
-    let ping_handshake = format!("*1{CRLF}$4{CRLF}ping{CRLF}");
-    master
-        .write_all(ping_handshake.as_bytes())
-        .await
-        .expect("failed initiate handshake with master");
-    master
-        .flush()
-        .await
-        .expect("failed to flush master connection after ping");
-    let mut buf = vec![0; 512];
-    let len = master
-        .read(&mut buf)
-        .await
-        .expect("failed to read ping handshake response from master");
-    let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
-    if let Ok((resp, _)) = decode_resp(resp) {
-        match resp {
-            DataType::SimpleString(ref s) => {
-                if s.to_lowercase().as_str() != "pong" {
-                    eprintln!("unexpected response from master: {s}");
+    task::spawn(async move {
+        let mut master = TcpStream::connect((ip, master_port))
+            .await
+            .expect("failed to connect to master");
+        let ping_handshake = format!("*1{CRLF}$4{CRLF}ping{CRLF}");
+        master
+            .write_all(ping_handshake.as_bytes())
+            .await
+            .expect("failed initiate handshake with master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after ping");
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read ping handshake response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(ref s) => {
+                    if s.to_lowercase().as_str() != "pong" {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected handshake response from master: {resp:?}");
                     std::process::exit(1);
                 }
             }
-            _ => {
-                eprintln!("unexpected handshake response from master: {resp:?}");
-                std::process::exit(1);
-            }
         }
-    }
-    let replconf_port = format!(
+        let replconf_port = format!(
         "*3{CRLF}$8{CRLF}REPLCONF{CRLF}$14{CRLF}listening-port{CRLF}${port_len}{CRLF}{port}{CRLF}",
         port_len = port.to_string().len(),
     );
-    master
-        .write_all(replconf_port.as_bytes())
-        .await
-        .expect("failed to send REPLCONF listening-port to master");
-    master
-        .flush()
-        .await
-        .expect("failed to flush master connection after replconf listening-port");
+        master
+            .write_all(replconf_port.as_bytes())
+            .await
+            .expect("failed to send REPLCONF listening-port to master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after replconf listening-port");
 
-    let mut buf = vec![0; 512];
-    let len = master
-        .read(&mut buf)
-        .await
-        .expect("failed to read replconf listening-port response from master");
-    let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
-    if let Ok((resp, _)) = decode_resp(resp) {
-        match resp {
-            DataType::SimpleString(ref s) => {
-                if s.to_lowercase().as_str() != "ok" {
-                    eprintln!("unexpected response from master: {s}");
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read replconf listening-port response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(ref s) => {
+                    if s.to_lowercase().as_str() != "ok" {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected replconf listening-port response from master: {resp:?}");
                     std::process::exit(1);
                 }
             }
-            _ => {
-                eprintln!("unexpected replconf listening-port response from master: {resp:?}");
-                std::process::exit(1);
-            }
+        } else {
+            eprintln!("failed to decode replconf listening-port response from master");
+            std::process::exit(1);
         }
-    } else {
-        eprintln!("failed to decode replconf listening-port response from master");
-        std::process::exit(1);
-    }
 
-    let replconf_capa =
-        format!("*3{CRLF}$8{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
-    master
-        .write_all(replconf_capa.as_bytes())
-        .await
-        .expect("failed to send REPLCONF capa to master");
-    master
-        .flush()
-        .await
-        .expect("failed to flush master connection after replconf capa");
+        let replconf_capa =
+            format!("*3{CRLF}$8{CRLF}REPLCONF{CRLF}$4{CRLF}capa{CRLF}$6{CRLF}psync2{CRLF}");
+        master
+            .write_all(replconf_capa.as_bytes())
+            .await
+            .expect("failed to send REPLCONF capa to master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after replconf capa");
 
-    let mut buf = vec![0; 512];
-    let len = master
-        .read(&mut buf)
-        .await
-        .expect("failed to read replconf capa response from master");
-    let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
-    if let Ok((resp, _)) = decode_resp(resp) {
-        match resp {
-            DataType::SimpleString(ref s) => {
-                if s.to_lowercase().as_str() != "ok" {
-                    eprintln!("unexpected response from master: {s}");
+        let mut buf = vec![0; 512];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read replconf capa response from master");
+        let resp = std::str::from_utf8(&buf[..len]).expect("invalid utf8 string");
+        if let Ok((resp, _)) = decode_resp(resp) {
+            match resp {
+                DataType::SimpleString(ref s) => {
+                    if s.to_lowercase().as_str() != "ok" {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected replconf capa response from master: {resp:?}");
                     std::process::exit(1);
                 }
             }
-            _ => {
-                eprintln!("unexpected replconf capa response from master: {resp:?}");
-                std::process::exit(1);
-            }
+        } else {
+            eprintln!("failed to decode replconf capa response from master");
+            std::process::exit(1);
         }
-    } else {
-        eprintln!("failed to decode replconf capa response from master");
-        std::process::exit(1);
-    }
 
-    let psync = format!("*3{CRLF}$5{CRLF}PSYNC{CRLF}$1{CRLF}?{CRLF}$2{CRLF}-1{CRLF}");
-    master
-        .write_all(psync.as_bytes())
-        .await
-        .expect("failed to send PSYNC to master");
-    master
-        .flush()
-        .await
-        .expect("failed to flush master connection after psync");
+        let psync = format!("*3{CRLF}$5{CRLF}PSYNC{CRLF}$1{CRLF}?{CRLF}$2{CRLF}-1{CRLF}");
+        master
+            .write_all(psync.as_bytes())
+            .await
+            .expect("failed to send PSYNC to master");
+        master
+            .flush()
+            .await
+            .expect("failed to flush master connection after psync");
 
-    let mut buf = vec![0; 4096];
-    let len = master
-        .read(&mut buf)
-        .await
-        .expect("failed to read psync response from master");
-    let resp = String::from_utf8_lossy(&buf[..len]).to_string();
-    if let Ok((resp, _)) = decode_resp(resp.as_str()) {
-        match resp {
-            DataType::BulkString(ref s) | DataType::SimpleString(ref s) => {
-                if s.to_lowercase().is_empty() {
-                    eprintln!("unexpected response from master: {s}");
+        let mut buf = vec![0; 4096];
+        let len = master
+            .read(&mut buf)
+            .await
+            .expect("failed to read psync response from master");
+        let resp = String::from_utf8_lossy(&buf[..len]).to_string();
+        if let Ok((resp, _)) = decode_resp(resp.as_str()) {
+            match resp {
+                DataType::BulkString(ref s) | DataType::SimpleString(ref s) => {
+                    if s.to_lowercase().is_empty() {
+                        eprintln!("unexpected response from master: {s}");
+                        std::process::exit(1);
+                    } else {
+                        // TODO: implement me!
+                        println!("{s}")
+                    }
+                }
+                _ => {
+                    eprintln!("unexpected psync response from master: {resp:?}");
                     std::process::exit(1);
-                } else {
-                    // TODO: implement me!
-                    println!("{s}")
                 }
             }
-            _ => {
-                eprintln!("unexpected psync response from master: {resp:?}");
-                std::process::exit(1);
-            }
+        } else {
+            eprintln!("failed to decode psync response from master");
+            std::process::exit(1);
         }
-    } else {
-        eprintln!("failed to decode psync response from master");
-        std::process::exit(1);
-    }
-    println!("replication established with {ip}:{port}");
+        println!("replication established with {ip}:{port}");
+    });
 }
 
 pub(crate) fn parse(input: &str) -> Result<Vec<Command>> {
